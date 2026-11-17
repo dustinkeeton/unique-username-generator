@@ -1,4 +1,4 @@
-import { adjectives, nouns, generateFromEmail, uniqueUsernameGenerator, generateUsername } from "../src/index";
+import { adjectives, nouns, generateFromEmail, uniqueUsernameGenerator, generateUsername, generateMany, generateUniqueAsync } from "../src/index";
 import { expect } from "chai";
 
 describe("generate-unique-username-from-email unit tests", (): void => {
@@ -9,6 +9,28 @@ describe("generate-unique-username-from-email unit tests", (): void => {
   it("generating from email with special character in the name", (): void => {
     const actual: string = generateFromEmail("lakshmi.narayan@example.com");
     expect(actual).is.equal("lakshminarayan");
+  });
+  it("generateFromEmail should strip leading digits from local part", (): void => {
+    const actual: string = generateFromEmail("243423423432asasdsa@dd.dd", 1);
+    expect(actual.slice(0, -1)).is.equal("asasdsa");
+  });
+  it("generateFromEmail can keep leading digits when configured", (): void => {
+    const actual: string = generateFromEmail("123abc@example.com", { randomDigits: 0, stripLeadingDigits: false });
+    expect(actual).is.equal("123abc");
+  });
+  it("generateFromEmail can customize fallback when all digits", (): void => {
+    const actual: string = generateFromEmail("12345@example.com", { randomDigits: 0, leadingFallback: "member" });
+    expect(actual).is.equal("member");
+  });
+  it("generateFromEmail preserves case and whitespace", (): void => {
+    expect(generateFromEmail("Jane Doe@example.com")).to.equal("Jane Doe");
+  });
+  it("generateFromEmail preserves a custom fallback with random digits", (): void => {
+    const actual = generateFromEmail("123@example.com", { leadingFallback: "Team Member", randomDigits: 2 });
+    expect(actual).to.match(/^Team Member\d{2}$/);
+  });
+  it("generateFromEmail preserves an empty local part when stripping is disabled", (): void => {
+    expect(generateFromEmail("@example.com", { stripLeadingDigits: false })).to.equal("");
   });
   it("generating from email containing no special character in the name and adding one random digit", (): void => {
     const actual: string = generateFromEmail("lakshminarayan@example.com", 1);
@@ -100,6 +122,55 @@ describe("generate-unique-username-uniqueUsernameGenerator unit tests", (): void
     const actual: string = uniqueUsernameGenerator({ dictionaries: [adjectives, nouns] });
     expect(actual).not.contains("-");
   });
+  it("uniqueUsernameGenerator excludes profane words by default", (): void => {
+    const config = { dictionaries: [["shit"], ["nice"]] } as any;
+    const actual: string = uniqueUsernameGenerator(config);
+    expect(actual).to.equal("nice");
+  });
+  it("uniqueUsernameGenerator supports extra exclude list", (): void => {
+    const config = { dictionaries: [["alpha", "beta"]], exclude: ["beta"], randomDigits: 0 } as any;
+    const actual: string = uniqueUsernameGenerator(config);
+    expect(actual).to.equal("alpha");
+  });
+  it("formatting styles work", (): void => {
+    const cfg = { dictionaries: [["blue"], ["whale"]], separator: "-" } as any;
+    expect(uniqueUsernameGenerator({ ...cfg, style: "kebabCase", randomDigits: 0, length: 20 })).to.equal("blue-whale");
+    expect(uniqueUsernameGenerator({ ...cfg, style: "snakeCase", randomDigits: 0, length: 20 })).to.equal("blue_whale");
+    expect(uniqueUsernameGenerator({ ...cfg, style: "camelCase", randomDigits: 0, length: 20 })).to.equal("blueWhale");
+    expect(uniqueUsernameGenerator({ ...cfg, style: "pascalCase", randomDigits: 0, length: 20 })).to.equal("BlueWhale");
+    expect(uniqueUsernameGenerator({ ...cfg, style: "titleCase", randomDigits: 0, length: 20 })).to.equal("Blue-Whale");
+  });
+  it("deterministic output with seed", (): void => {
+    const cfg = { dictionaries: [["a","b","c"], ["x","y","z"]], randomDigits: 0, seed: "seed" } as any;
+    const a: string = uniqueUsernameGenerator(cfg);
+    const b: string = uniqueUsernameGenerator(cfg);
+    expect(a).to.equal(b);
+  });
+  it("template rendering works", (): void => {
+    const cfg = { dictionaries: [["blue"], ["whale"]], randomDigits: 0, seed: 1, template: "{adjective}-{noun}-{digits:2}" } as any;
+    const actual: string = uniqueUsernameGenerator(cfg);
+    expect(actual).to.match(/^blue-whale-\d{2}$/);
+  });
+  it("generateMany produces requested count and uniqueness when asked", (): void => {
+    const cfg = { dictionaries: [["a","b"],["x","y"]], randomDigits: 0 } as any;
+    const many = generateMany({ ...cfg, count: 3, unique: true });
+    expect(many).to.lengthOf(3);
+    expect(new Set(many).size).to.equal(3);
+  });
+  it("generateUniqueAsync retries until available", async (): Promise<void> => {
+    const cfg = { dictionaries: [["a","b"],["x","y"]], randomDigits: 0 } as any;
+    const seen = new Set<string>();
+    const isTaken = (candidate: string) => {
+      if (seen.size === 0) {
+        seen.add(candidate);
+        return true; // first generated is taken
+      }
+      return false;
+    };
+    const username = await generateUniqueAsync(cfg, isTaken, 50);
+    expect(username).to.be.a("string");
+    expect(username).to.not.equal(Array.from(seen)[0]);
+  });
 });
 
 describe("generate-unique-username unit tests", (): void => {
@@ -132,6 +203,42 @@ describe("generate-unique-username unit tests", (): void => {
   });
   it("generating unique username with random number and prefix only", (): void => {
     const actual: string = generateUsername("-", 1, undefined, "unique username", true);
-    expect(actual).to.contain(`unique-username-`);
+    expect(actual).to.match(/^unique-username-\d$/);
   });
-})
+  it("generating prefix only without a separator", (): void => {
+    expect(generateUsername(undefined, undefined, undefined, "Unique Username", true)).to.equal("uniqueusername");
+  });
+  it("generating prefix only with an empty separator and random digits", (): void => {
+    expect(generateUsername("", 2, undefined, "Unique Username", true)).to.match(/^uniqueusername\d{2}$/);
+  });
+  it("generating prefix only normalizes repeated whitespace", (): void => {
+    expect(generateUsername("-", 0, undefined, "Unique  Username", true)).to.equal("unique-username");
+  });
+  it("generating prefix only with a multi-character separator", (): void => {
+    expect(generateUsername("--", 0, undefined, "Unique Username", true)).to.equal("unique--username");
+    expect(generateUsername("--", 2, undefined, "Unique Username", true)).to.match(/^unique--username--\d{2}$/);
+  });
+  it("generating prefix only respects the maximum length", (): void => {
+    expect(generateUsername("-", 2, 4, "Unique Username", true)).to.equal("uniq");
+  });
+  it("generating prefix only removes a separator at the truncation boundary", (): void => {
+    expect(generateUsername("-", 2, 7, "Unique Username", true)).to.equal("unique");
+    expect(generateUsername("--", 2, 8, "Unique Username", true)).to.equal("unique");
+  });
+  it("generating with a prefix still includes a noun by default or when prefixOnly is false", (): void => {
+    for (const prefixOnly of [undefined, false]) {
+      const actual = generateUsername("-", 0, undefined, "Unique Username", prefixOnly);
+      expect(actual).to.match(/^unique-username-.+$/);
+      expect(nouns).to.include(actual.slice("unique-username-".length));
+    }
+  });
+  it("generating without prefixOnly preserves a separator at the truncation boundary", (): void => {
+    expect(generateUsername("-", 0, 7, "Unique Username")).to.equal("unique-");
+  });
+  it("generating prefix only falls back to an adjective when the prefix is missing or empty", (): void => {
+    for (const prefix of [undefined, ""]) {
+      const actual = generateUsername("-", 0, undefined, prefix, true);
+      expect(adjectives).to.include(actual);
+    }
+  });
+});
